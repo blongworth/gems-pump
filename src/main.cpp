@@ -48,15 +48,20 @@ void loop() {
 }
 
 void turnValve() {
+  static elapsedMillis valveTimer = 0;
+  if (valveTimer < 1000) {
+    return; // don't change valve more often than every second
+  }
   if (power.readBusVoltage() < thresholdVoltage) {
     Serial.println("Power too low, returning to home position");
     valve.write(home);
     digitalWrite(inPosition, LOW);
     red.update(100, 900);
     green.update(100, 900);
+    valveTimer = 0;
     return;
   }
-  if (digitalRead(posRequest) == HIGH && valve.read() != high) {
+  if (digitalRead(posRequest) == HIGH && valve.read() < high - 10) {
     digitalWrite(inPosition, LOW);
     Serial.println("Turning to high");
     valve.write(high);
@@ -65,7 +70,7 @@ void turnValve() {
     red.update(100, 900);
     green.update(0, 1000);
   } 
-  if (digitalRead(posRequest) == LOW && valve.read() != low) {
+  if (digitalRead(posRequest) == LOW && valve.read() > low + 10) {
     digitalWrite(inPosition, LOW);
     Serial.println("Turning to low");
     valve.write(low);
@@ -74,4 +79,5 @@ void turnValve() {
     red.update(0, 1000);
     green.update(100, 900);
   }
+  valveTimer = 0;
 }
