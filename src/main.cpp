@@ -10,11 +10,9 @@ const int thresholdVoltage = 10000; //in mV
 
 // valve servo settings
 Servo valve;
-const int lowus=1205; //0 degrees 1205 us
-const int highus=1795; //179 degrees 1795 us
-const int low=0; //0 degrees 1205 us
-const int home=90; //0 degrees 1205 us
-const int high=179; //0 degrees 1205 us
+const int low=1205; //0 degrees 1205 us
+const int high=1795; //179 degrees 1795 us
+const int home=1500; //89 degrees 1500 us
 
 // control and readback pins
 const int posRequest = 4; //pin for the position request
@@ -33,12 +31,13 @@ void setup() {
     Serial.println("Couldn't find INA260 chip");
     while (1);
   }
-  pinMode(posRequest, INPUT);
-  pinMode(inPosition, OUTPUT);
-  valve.attach(1, lowus, highus);
-  valve.write(home);
+  valve.attach(1);
+  valve.writeMicroseconds(home);
   red.update(100, 900);
   green.update(100, 900);
+  pinMode(posRequest, INPUT_PULLUP); // state will be HIGH if disconnected
+  delayMicroseconds(10); // allow pullup to charge
+  pinMode(inPosition, OUTPUT);
 }
 
 void loop() {
@@ -54,26 +53,26 @@ void turnValve() {
   }
   if (power.readBusVoltage() < thresholdVoltage) {
     Serial.println("Power too low, returning to home position");
-    valve.write(home);
+    valve.writeMicroseconds(home);
     digitalWrite(inPosition, LOW);
     red.update(100, 900);
     green.update(100, 900);
     valveTimer = 0;
     return;
   }
-  if (digitalRead(posRequest) == HIGH && valve.read() < high - 10) {
+  if (digitalRead(posRequest) == HIGH && valve.readMicroseconds() < high - 10) {
     digitalWrite(inPosition, LOW);
     Serial.println("Turning to high");
-    valve.write(high);
+    valve.writeMicroseconds(high);
     delay(100);
     digitalWrite(inPosition, HIGH);
     red.update(100, 900);
     green.update(0, 1000);
   } 
-  if (digitalRead(posRequest) == LOW && valve.read() > low + 10) {
+  if (digitalRead(posRequest) == LOW && valve.readMicroseconds() > low + 10) {
     digitalWrite(inPosition, LOW);
     Serial.println("Turning to low");
-    valve.write(low);
+    valve.writeMicroseconds(low);
     delay(100);
     digitalWrite(inPosition, HIGH);
     red.update(0, 1000);
