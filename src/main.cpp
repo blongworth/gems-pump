@@ -25,6 +25,10 @@
 #include <Adafruit_INA260.h>
 #include <Flasher.h>
 
+// Optional timer-based valve control
+// define VALVE_CHANGE_TIME to enable automatic valve switching based on time
+// #define VALVE_CHANGE_TIME 7.5 * 60 * 1000 // Time in milliseconds (e.g., 7.5 minute)
+
 const unsigned long LOG_INTERVAL = 10; // Logging interval in seconds
 const int LOW_MICROSECONDS = 1205;  // 0 degrees
 const int HIGH_MICROSECONDS = 1795; // 179 degrees
@@ -38,7 +42,7 @@ int voltage = 0;
 int current = 0;
 
 // Global variable for current filename
-char filename[32];
+char filename[32] = {0};
 
 // valve servo settings
 Servo valve;
@@ -103,13 +107,13 @@ void updateFilename() {
   static time_t lastDay = 0;
   time_t t = now();
 
-  if (day(t) != day(lastDay)) { // Check if day has changed
+  if (strlen(filename) == 0 || day(t) != day(lastDay)) { // Check if filename not set or day has changed
     sprintf(filename, "gems_pump_%04d-%02d-%02d.csv", year(t), month(t), day(t));
 
     if (!SD.exists(filename)) { // Create new file with headers if it doesn't exist
       File dataFile = SD.open(filename, FILE_WRITE);
       if (dataFile) {
-        dataFile.println("timestamp,voltage,current");
+        dataFile.println("timestamp,voltage,current,valve_position"); 
         dataFile.close();
       }
     }
@@ -128,18 +132,21 @@ void logPower() {
   if ((now() - lastLogTime) < LOG_INTERVAL) return; // Skip if interval not met
 
   measurePower(); // Ensure updated values before logging
-
-  // Log to serial
-  Serial.printf("Logged Power - Voltage: %d mV, Current: %d mA\n", voltage, current);
+  int valve_pos = valve.readMicroseconds(); // Read current valve position in microseconds
 
   // Log to SD card
   char timestamp[25];
   time_t t = now();
   sprintf(timestamp, "%04d-%02d-%02dT%02d:%02d:%02dZ", year(t), month(t), day(t), hour(t), minute(t), second(t));
+  
+  // Log to serial
+  Serial.printf("Logged Power at %s - Voltage: %d mV, Current: %d mA, Valve Pos: %d\n",
+    timestamp, voltage, current, valve_pos);
+
 
   File dataFile = SD.open(filename, FILE_WRITE);
   if (dataFile) {
-    dataFile.printf("%s,%d,%d\n", timestamp, voltage, current);
+    dataFile.printf("%s,%d,%d\n", timestamp, voltage, current, valve_pos);
     dataFile.close();
   } else {
     Serial.printf("Error opening %s\n", filename);
@@ -160,15 +167,29 @@ void turnValve() {
     return;
   }
 
+#ifdef VALVE_CHANGE_TIME
+  static unsigned long lastValveChange = 0;
+  if (millis() - lastValveChange >= VALVE_CHANGE_TIME) {
+    if (valve.readMicroseconds() == LOW_MICROSECONDS) {
+      Serial.println("Timer: Turning to high");
+      setValvePosition(HIGH_MICROSECONDS, HIGH);
+    } else {
+      Serial.println("Timer: Turning to low");
+      setValvePosition(LOW_MICROSECONDS, LOW);
+    }
+    lastValveChange = millis();
+  }
+#else
   if (digitalRead(posRequest) == HIGH && valve.readMicroseconds() < HIGH_MICROSECONDS - 10) {
     Serial.println("Turning to high");
     setValvePosition(HIGH_MICROSECONDS, HIGH);
-    valveTimer = 0;
   } else if (digitalRead(posRequest) == LOW && valve.readMicroseconds() > LOW_MICROSECONDS + 10) {
     Serial.println("Turning to low");
     setValvePosition(LOW_MICROSECONDS, LOW);
-    valveTimer = 0;
   }
+#endif
+
+  valveTimer = 0;
 }
 
 void setValvePosition(int position, int ledState) {
