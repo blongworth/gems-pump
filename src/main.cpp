@@ -33,6 +33,10 @@ const int POSITION_CHANGE_DELAY = 1000; // in milliseconds
 //Threshold voltage = too low power!!
 const int THRESHOLD_VOLTAGE = 10000; //in mV
 
+// Optional timer-based valve control
+// define VALVE_CHANGE_TIME to enable automatic valve switching based on time
+// #define VALVE_CHANGE_TIME 7.5 * 60 * 1000 // Time in milliseconds (e.g., 7.5 minute)
+
 Adafruit_INA260 power = Adafruit_INA260();
 int voltage = 0;
 int current = 0;
@@ -160,15 +164,29 @@ void turnValve() {
     return;
   }
 
+#ifdef VALVE_CHANGE_TIME
+  static unsigned long lastValveChange = 0;
+  if (millis() - lastValveChange >= VALVE_CHANGE_TIME) {
+    if (valve.readMicroseconds() == LOW_MICROSECONDS) {
+      Serial.println("Timer: Turning to high");
+      setValvePosition(HIGH_MICROSECONDS, HIGH);
+    } else {
+      Serial.println("Timer: Turning to low");
+      setValvePosition(LOW_MICROSECONDS, LOW);
+    }
+    lastValveChange = millis();
+  }
+#else
   if (digitalRead(posRequest) == HIGH && valve.readMicroseconds() < HIGH_MICROSECONDS - 10) {
     Serial.println("Turning to high");
     setValvePosition(HIGH_MICROSECONDS, HIGH);
-    valveTimer = 0;
   } else if (digitalRead(posRequest) == LOW && valve.readMicroseconds() > LOW_MICROSECONDS + 10) {
     Serial.println("Turning to low");
     setValvePosition(LOW_MICROSECONDS, LOW);
-    valveTimer = 0;
   }
+#endif
+
+  valveTimer = 0;
 }
 
 void setValvePosition(int position, int ledState) {
