@@ -61,7 +61,7 @@ time_t getTeensy3Time();
 
 void setup() {
   Serial.begin(115200);
-
+  Serial.printf("Compiled: %s %s\n", __DATE__, __TIME__);
   // Initialize RTC
   setSyncProvider(getTeensy3Time);
   Serial.println(timeStatus() != timeSet ? "Unable to sync with RTC" : "RTC has set the system time");
