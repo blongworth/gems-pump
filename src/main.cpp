@@ -27,7 +27,7 @@
 
 // Optional timer-based valve control
 // define VALVE_CHANGE_TIME to enable automatic valve switching based on time
-// #define VALVE_CHANGE_TIME 7.5 * 60 * 1000 // Time in milliseconds (e.g., 7.5 minute)
+// #define VALVE_CHANGE_TIME 1 * 60 * 1000 // Time in milliseconds (e.g., 7.5 minute)
 
 const unsigned long LOG_INTERVAL = 10; // Logging interval in seconds
 const int LOW_MICROSECONDS = 1205;  // 0 degrees
@@ -74,6 +74,19 @@ void setup() {
   if (!SD.begin(BUILTIN_SDCARD)) {
     Serial.println("SD card initialization failed!");
     // while (1);
+  }
+
+  // log reboots
+  updateFilename();
+  File dataFile = SD.open(filename, FILE_WRITE);
+  if (dataFile) {
+    char timestamp[25];
+    time_t t = now();
+    sprintf(timestamp, "%04d-%02d-%02dT%02d:%02d:%02dZ", year(t), month(t), day(t), hour(t), minute(t), second(t));
+    dataFile.printf("Rebooted at %s\n", timestamp);
+    dataFile.close();
+  } else {
+    Serial.printf("Error opening %s\n", filename);
   }
 
   // Initialize INA260 sensor
@@ -146,7 +159,7 @@ void logPower() {
 
   File dataFile = SD.open(filename, FILE_WRITE);
   if (dataFile) {
-    dataFile.printf("%s,%d,%d\n", timestamp, voltage, current, valve_pos);
+    dataFile.printf("%s,%d,%d,%d\n", timestamp, voltage, current, valve_pos);
     dataFile.close();
   } else {
     Serial.printf("Error opening %s\n", filename);
