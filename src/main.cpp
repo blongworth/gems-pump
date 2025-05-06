@@ -47,13 +47,12 @@ char filename[32] = {0};
 // valve servo settings
 Servo valve;
 
-// control and readback pins
-const int posRequest = 4; //pin for the position request
-const int inPosition = 6; //pin for the in position response
-                     
 // led setup
 Flasher red(39, 0, 1000);
 Flasher green(36, 0, 1000);
+
+// Lander Serial
+#define LANDER_SERIAL Serial2
 
 // function prototypes
 void measurePower(); // Measure voltage and current from INA260
@@ -101,10 +100,7 @@ void setup() {
   red.update(100, 900);
   green.update(100, 900);
 
-  // Configure pins
-  pinMode(posRequest, INPUT_PULLUP);
-  delayMicroseconds(10); // Allow pullup to charge
-  pinMode(inPosition, OUTPUT);
+  LANDER_SERIAL.begin(9600);
 }
 
 void loop() {
@@ -168,6 +164,12 @@ void logPower() {
   lastLogTime = now();
 }
 
+void sendPos(char pos) {
+  LANDER_SERIAL.write(pos);
+  LANDER_SERIAL.flush();
+  Serial.printf("Sent position: %c\n", pos);
+} 
+
 void turnValve() {
   static elapsedMillis valveTimer = 0;
 
@@ -193,12 +195,15 @@ void turnValve() {
     lastValveChange = millis();
   }
 #else
-  if (digitalRead(posRequest) == HIGH && valve.readMicroseconds() < HIGH_MICROSECONDS - 10) {
-    Serial.println("Turning to high");
-    setValvePosition(HIGH_MICROSECONDS, HIGH);
-  } else if (digitalRead(posRequest) == LOW && valve.readMicroseconds() > LOW_MICROSECONDS + 10) {
-    Serial.println("Turning to low");
-    setValvePosition(LOW_MICROSECONDS, LOW);
+  if (LANDER_SERIAL.available()) {
+    char command = LANDER_SERIAL.read();
+    if (command == 't' && valve.readMicroseconds() < HIGH_MICROSECONDS - 10) {
+      Serial.println("Turning to high");
+      setValvePosition(HIGH_MICROSECONDS, HIGH);
+    } else if (command == 'b' && valve.readMicroseconds() > LOW_MICROSECONDS + 10) {
+      Serial.println("Turning to low");
+      setValvePosition(LOW_MICROSECONDS, LOW);
+    }
   }
 #endif
 
@@ -206,11 +211,9 @@ void turnValve() {
 }
 
 void setValvePosition(int position, int ledState) {
-  digitalWrite(inPosition, LOW);
   valve.writeMicroseconds(position);
-  delay(100);
-  digitalWrite(inPosition, HIGH);
-
+  char posChar = (position == LOW_MICROSECONDS) ? 'b' : 't';
+  sendPos(posChar);
   if (ledState == HIGH) {
     red.update(100, 900);
     green.update(0, 1000);
