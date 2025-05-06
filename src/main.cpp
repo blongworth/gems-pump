@@ -24,10 +24,11 @@
 #include <SD.h>
 #include <Adafruit_INA260.h>
 #include <Flasher.h>
+#include <EEPROM.h>
 
 // Optional timer-based valve control
 // define VALVE_CHANGE_TIME to enable automatic valve switching based on time
-// #define VALVE_CHANGE_TIME 1 * 60 * 1000 // Time in milliseconds (e.g., 7.5 minute)
+#define VALVE_CHANGE_TIME 1 * 60 * 1000 // Time in milliseconds (e.g., 7.5 minute)
 
 const unsigned long LOG_INTERVAL = 10; // Logging interval in seconds
 const int LOW_MICROSECONDS = 1205;  // 0 degrees
@@ -96,7 +97,13 @@ void setup() {
 
   // Initialize valve and LEDs
   valve.attach(1);
-  valve.writeMicroseconds(HOME_MICROSECONDS);
+
+  // Set initial valve position to last position from EEPROM
+  int lastPosition = EEPROM.read(0); // Read last position from EEPROM
+
+  int setPos = (lastPosition) ? HIGH_MICROSECONDS : LOW_MICROSECONDS;
+  valve.writeMicroseconds(setPos);
+
   red.update(100, 900);
   green.update(100, 900);
 
@@ -186,10 +193,10 @@ void turnValve() {
   static unsigned long lastValveChange = 0;
   if (millis() - lastValveChange >= VALVE_CHANGE_TIME) {
     if (valve.readMicroseconds() == LOW_MICROSECONDS) {
-      Serial.println("Timer: Turning to high");
+      Serial.println("Timer: Turning to top");
       setValvePosition(HIGH_MICROSECONDS, HIGH);
     } else {
-      Serial.println("Timer: Turning to low");
+      Serial.println("Timer: Turning to bottom");
       setValvePosition(LOW_MICROSECONDS, LOW);
     }
     lastValveChange = millis();
@@ -212,6 +219,7 @@ void turnValve() {
 
 void setValvePosition(int position, int ledState) {
   valve.writeMicroseconds(position);
+  EEPROM.update(0, (position == HIGH_MICROSECONDS) ? 1 : 0); // Store position in EEPROM
   char posChar = (position == LOW_MICROSECONDS) ? 'b' : 't';
   sendPos(posChar);
   if (ledState == HIGH) {
