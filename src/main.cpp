@@ -15,7 +15,7 @@
  * @note Based on orginial code by Samuel Koeck
  * 
  * @author Brett Longworth
- * @date 2024
+ * @date 2025
  */
 
 #include <Arduino.h>
@@ -27,14 +27,16 @@
 #include <EEPROM.h>
 
 // Optional timer-based valve control
-// define VALVE_CHANGE_TIME to enable automatic valve switching based on time
-#define VALVE_CHANGE_TIME 1 * 60 * 1000 // Time in milliseconds (e.g., 7.5 minute)
+#define TIMED_VALVE_CHANGE // to enable automatic valve switching based on time
+
+// Clock time valve change interval in seconds
+const unsigned long VALVE_CHANGE_INTERVAL = 7.5 * 60; // 7:30 minutes
 
 const unsigned long LOG_INTERVAL = 10; // Logging interval in seconds
 const int LOW_MICROSECONDS = 1205;  // 0 degrees
 const int HIGH_MICROSECONDS = 1795; // 179 degrees
 const int HOME_MICROSECONDS = 1500; // 89 degrees
-const int POSITION_CHANGE_DELAY = 1000; // in milliseconds
+const int POSITION_CHANGE_DELAY = 2000; // in milliseconds
 //Threshold voltage = too low power!!
 const int THRESHOLD_VOLTAGE = 10000; //in mV
 
@@ -62,10 +64,17 @@ void turnValve();
 void setValvePosition(int position, int ledState);
 void updateFilename();
 time_t getTeensy3Time();
+bool isIntervalTime(int intervalSeconds);
 
 void setup() {
   Serial.begin(115200);
+  Serial.println("GEMS Pump Control System");
   Serial.printf("Compiled: %s %s\n", __DATE__, __TIME__);
+
+  LANDER_SERIAL.begin(115200);
+  LANDER_SERIAL.println("Lander Serial Initialized");
+
+
   // Initialize RTC
   setSyncProvider(getTeensy3Time);
   Serial.println(timeStatus() != timeSet ? "Unable to sync with RTC" : "RTC has set the system time");
@@ -73,7 +82,6 @@ void setup() {
   // Initialize SD card
   if (!SD.begin(BUILTIN_SDCARD)) {
     Serial.println("SD card initialization failed!");
-    // while (1);
   }
 
   // log reboots
@@ -98,16 +106,15 @@ void setup() {
   // Initialize valve and LEDs
   valve.attach(1);
 
+  red.begin();
+  green.begin();
+
   // Set initial valve position to last position from EEPROM
   int lastPosition = EEPROM.read(0); // Read last position from EEPROM
 
   int setPos = (lastPosition) ? HIGH_MICROSECONDS : LOW_MICROSECONDS;
-  valve.writeMicroseconds(setPos);
+  setValvePosition(setPos, lastPosition ? HIGH : LOW);
 
-  red.update(100, 900);
-  green.update(100, 900);
-
-  LANDER_SERIAL.begin(9600);
 }
 
 void loop() {
@@ -189,9 +196,8 @@ void turnValve() {
     return;
   }
 
-#ifdef VALVE_CHANGE_TIME
-  static unsigned long lastValveChange = 0;
-  if (millis() - lastValveChange >= VALVE_CHANGE_TIME) {
+#ifdef TIMED_VALVE_CHANGE
+  if (isIntervalTime(VALVE_CHANGE_INTERVAL)) {
     if (valve.readMicroseconds() == LOW_MICROSECONDS) {
       Serial.println("Timer: Turning to top");
       setValvePosition(HIGH_MICROSECONDS, HIGH);
@@ -199,7 +205,7 @@ void turnValve() {
       Serial.println("Timer: Turning to bottom");
       setValvePosition(LOW_MICROSECONDS, LOW);
     }
-    lastValveChange = millis();
+    valveTimer = 0;
   }
 #else
   if (LANDER_SERIAL.available()) {
@@ -213,8 +219,6 @@ void turnValve() {
     }
   }
 #endif
-
-  valveTimer = 0;
 }
 
 void setValvePosition(int position, int ledState) {
@@ -233,4 +237,12 @@ void setValvePosition(int position, int ledState) {
 
 time_t getTeensy3Time() {
   return Teensy3Clock.get();
+}
+
+bool isIntervalTime(int intervalSeconds) {
+  time_t t = now();
+  int minutes = minute(t);
+  int seconds = second(t);
+  int totalSeconds = minutes * 60 + seconds;
+  return (totalSeconds % intervalSeconds) == 0;
 }
