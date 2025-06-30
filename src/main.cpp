@@ -53,6 +53,7 @@ Servo valve;
 // led setup
 Flasher red(39, 0, 1000);
 Flasher green(36, 0, 1000);
+Flasher heartbeat(LED_BUILTIN, 100, 900); // Heartbeat LED on built-in LED pin
 
 // Lander Serial
 #define LANDER_SERIAL Serial2
@@ -108,6 +109,7 @@ void setup() {
 
   red.begin();
   green.begin();
+  heartbeat.begin();
 
   // Set initial valve position to last position from EEPROM
   int lastPosition = EEPROM.read(0); // Read last position from EEPROM
@@ -124,6 +126,7 @@ void loop() {
   turnValve();
   red.run();
   green.run();
+  heartbeat.run();
 }
 
 void updateFilename() {
