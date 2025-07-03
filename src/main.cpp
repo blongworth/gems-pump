@@ -192,13 +192,6 @@ void turnValve() {
 
   if (valveTimer < POSITION_CHANGE_DELAY) return; // Enforce rate limit
 
-  if (voltage < THRESHOLD_VOLTAGE) {
-    Serial.println("Power too low, returning to home position");
-    setValvePosition(HOME_MICROSECONDS, LOW);
-    valveTimer = 0;
-    return;
-  }
-
 #ifdef TIMED_VALVE_CHANGE
   if (isIntervalTime(VALVE_CHANGE_INTERVAL)) {
     if (valve.readMicroseconds() == LOW_MICROSECONDS) {
@@ -225,6 +218,13 @@ void turnValve() {
 }
 
 void setValvePosition(int position, int ledState) {
+
+  if (power.readBusVoltage() < THRESHOLD_VOLTAGE) {
+    Serial.println("Power too low, returning to home position");
+    setValvePosition(HOME_MICROSECONDS, LOW);
+    return;
+  }
+
   valve.writeMicroseconds(position);
   EEPROM.update(0, (position == HIGH_MICROSECONDS) ? 1 : 0); // Store position in EEPROM
   char posChar = (position == LOW_MICROSECONDS) ? 'b' : 't';
