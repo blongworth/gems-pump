@@ -59,10 +59,9 @@ Flasher heartbeat(LED_BUILTIN, 100, 900); // Heartbeat LED on built-in LED pin
 #define LANDER_SERIAL Serial2
 
 // function prototypes
-void measurePower(); // Measure voltage and current from INA260
 void logPower(); // Log the power data to the SD card and serial
 void turnValve();
-void setValvePosition(int position, int ledState);
+void setValvePosition(int position);
 void updateFilename();
 time_t getTeensy3Time();
 bool isIntervalTime(int intervalSeconds);
@@ -74,7 +73,6 @@ void setup() {
 
   LANDER_SERIAL.begin(115200);
   LANDER_SERIAL.println("Lander Serial Initialized");
-
 
   // Initialize RTC
   setSyncProvider(getTeensy3Time);
@@ -111,17 +109,17 @@ void setup() {
   green.begin();
   heartbeat.begin();
 
+#ifndef TIMED_VALVE_CHANGE
   // Set initial valve position to last position from EEPROM
   int lastPosition = EEPROM.read(0); // Read last position from EEPROM
-
   int setPos = (lastPosition) ? HIGH_MICROSECONDS : LOW_MICROSECONDS;
-  setValvePosition(setPos, lastPosition ? HIGH : LOW);
+  setValvePosition(setPos);
+#endif
 
 }
 
 void loop() {
   updateFilename();
-  measurePower();
   logPower();
   turnValve();
   red.run();
@@ -147,18 +145,14 @@ void updateFilename() {
   }
 }
 
-void measurePower() {
-  voltage = power.readBusVoltage();
-  current = power.readCurrent();
-}
-
 void logPower() {
   static unsigned long lastLogTime = 0;
 
-  if ((now() - lastLogTime) < LOG_INTERVAL) return; // Skip if interval not met
+  if ((now() - lastLogTime) < LOG_INTERVAL) return;
 
-  measurePower(); // Ensure updated values before logging
-  int valve_pos = valve.readMicroseconds(); // Read current valve position in microseconds
+  voltage = power.readBusVoltage();
+  current = power.readCurrent();
+  int valve_pos = valve.readMicroseconds();
 
   // Log to SD card
   char timestamp[25];
@@ -181,11 +175,13 @@ void logPower() {
   lastLogTime = now();
 }
 
+#ifndef TIMED_VALVE_CHANGE
 void sendPos(char pos) {
   LANDER_SERIAL.write(pos);
   LANDER_SERIAL.flush();
   Serial.printf("Sent position: %c\n", pos);
 } 
+#endif
 
 void turnValve() {
   static elapsedMillis valveTimer = 0;
@@ -196,10 +192,10 @@ void turnValve() {
   if (isIntervalTime(VALVE_CHANGE_INTERVAL)) {
     if (valve.readMicroseconds() == LOW_MICROSECONDS) {
       Serial.println("Timer: Turning to top");
-      setValvePosition(HIGH_MICROSECONDS, HIGH);
+      setValvePosition(HIGH_MICROSECONDS);
     } else {
       Serial.println("Timer: Turning to bottom");
-      setValvePosition(LOW_MICROSECONDS, LOW);
+      setValvePosition(LOW_MICROSECONDS);
     }
     valveTimer = 0;
   }
@@ -208,28 +204,35 @@ void turnValve() {
     char command = LANDER_SERIAL.read();
     if (command == 't' && valve.readMicroseconds() < HIGH_MICROSECONDS - 10) {
       Serial.println("Turning to high");
-      setValvePosition(HIGH_MICROSECONDS, HIGH);
+      setValvePosition(HIGH_MICROSECONDS);
     } else if (command == 'b' && valve.readMicroseconds() > LOW_MICROSECONDS + 10) {
       Serial.println("Turning to low");
-      setValvePosition(LOW_MICROSECONDS, LOW);
+      setValvePosition(LOW_MICROSECONDS);
     }
   }
 #endif
 }
 
-void setValvePosition(int position, int ledState) {
+void setValvePosition(int position) {
 
+  // Servo will lose it's home position if power is too low
+  // Setting to home gives us a chance it will be OK when power returns
   if (power.readBusVoltage() < THRESHOLD_VOLTAGE) {
     Serial.println("Power too low, returning to home position");
-    setValvePosition(HOME_MICROSECONDS, LOW);
+    valve.writeMicroseconds(HOME_MICROSECONDS);
+    red.update(200, 800);
+    green.update(200, 800);
     return;
   }
 
-  valve.writeMicroseconds(position);
   EEPROM.update(0, (position == HIGH_MICROSECONDS) ? 1 : 0); // Store position in EEPROM
+
+  #ifndef TIMED_VALVE_CHANGE
   char posChar = (position == LOW_MICROSECONDS) ? 'b' : 't';
   sendPos(posChar);
-  if (ledState == HIGH) {
+  #endif
+
+  if (position == HIGH_MICROSECONDS) {
     red.update(100, 900);
     green.update(0, 1000);
   } else {
