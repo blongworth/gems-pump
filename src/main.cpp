@@ -32,8 +32,8 @@
 const unsigned long VALVE_CHANGE_INTERVAL = 7.5 * 60; // 7:30 minutes
 
 const unsigned long LOG_INTERVAL = 10; // Logging interval in seconds
-const int LOW_MICROSECONDS = 1205;  // 0 degrees
-const int HIGH_MICROSECONDS = 1795; // 179 degrees
+const int BOTTOM_MICROSECONDS = 1205;  // 0 degrees
+const int TOP_MICROSECONDS = 1795; // 179 degrees
 const int HOME_MICROSECONDS = 1500; // 89 degrees
 //Threshold voltage = too low power!!
 const int THRESHOLD_VOLTAGE = 10000; //in mV
@@ -92,16 +92,16 @@ void setup() {
   heartbeat.begin();
 
 #ifndef TIMED_VALVE_CHANGE
-  int setPos = EEPROM.read(0) ? HIGH_MICROSECONDS : LOW_MICROSECONDS;
+  int setPos = EEPROM.read(0) ? TOP_MICROSECONDS : BOTTOM_MICROSECONDS;
   setValvePosition(setPos);
 #endif
 }
 
 void loop() {
+  checkAndHomeOnLowPower();
+  turnValve();
   updateFilename();
   logPower();
-  turnValve();
-  checkAndHomeOnLowPower();
   red.run();
   green.run();
   heartbeat.run();
@@ -168,23 +168,23 @@ void turnValve() {
 
 #ifdef TIMED_VALVE_CHANGE
   if (isIntervalTime(VALVE_CHANGE_INTERVAL)) {
-    if (valve.readMicroseconds() == LOW_MICROSECONDS) {
+    if (valve.readMicroseconds() == BOTTOM_MICROSECONDS) {
       Serial.println("Timer: Turning to top");
-      setValvePosition(HIGH_MICROSECONDS);
+      setValvePosition(TOP_MICROSECONDS);
     } else {
       Serial.println("Timer: Turning to bottom");
-      setValvePosition(LOW_MICROSECONDS);
+      setValvePosition(BOTTOM_MICROSECONDS);
     }
   }
 #else
   if (LANDER_SERIAL.available()) {
     char command = LANDER_SERIAL.read();
-    if (command == 't' && valve.readMicroseconds() < HIGH_MICROSECONDS - 10) {
-      Serial.println("Turning to high");
-      setValvePosition(HIGH_MICROSECONDS);
-    } else if (command == 'b' && valve.readMicroseconds() > LOW_MICROSECONDS + 10) {
-      Serial.println("Turning to low");
-      setValvePosition(LOW_MICROSECONDS);
+    if (command == 't' && valve.readMicroseconds() < TOP_MICROSECONDS - 10) {
+      Serial.println("Turning to top");
+      setValvePosition(TOP_MICROSECONDS);
+    } else if (command == 'b' && valve.readMicroseconds() > BOTTOM_MICROSECONDS + 10) {
+      Serial.println("Turning to bottom");
+      setValvePosition(BOTTOM_MICROSECONDS);
     }
   }
 #endif
@@ -202,14 +202,14 @@ void setValvePosition(int position) {
     return;
   }
 
-  EEPROM.update(0, (position == HIGH_MICROSECONDS) ? 1 : 0); // Store position in EEPROM
+  EEPROM.update(0, (position == TOP_MICROSECONDS) ? 1 : 0); // Store position in EEPROM
 
   #ifndef TIMED_VALVE_CHANGE
-  char posChar = (position == LOW_MICROSECONDS) ? 'b' : 't';
+  char posChar = (position == BOTTOM_MICROSECONDS) ? 'b' : 't';
   sendPos(posChar);
   #endif
 
-  if (position == HIGH_MICROSECONDS) {
+  if (position == TOP_MICROSECONDS) {
     red.update(100, 900);
     green.update(0, 1000);
   } else {
@@ -220,7 +220,7 @@ void setValvePosition(int position) {
 
 void checkAndHomeOnLowPower() {
   static unsigned long lastCheck = 0;
-  if (millis() - lastCheck < 100) return;
+  if (millis() - lastCheck < 10) return;
   lastCheck = millis();
 
   voltage = power.readBusVoltage();
