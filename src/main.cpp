@@ -202,6 +202,7 @@ void setValvePosition(int position) {
     return;
   }
 
+  valve.writeMicroseconds(position);
   EEPROM.update(0, (position == TOP_MICROSECONDS) ? 1 : 0); // Store position in EEPROM
 
   #ifndef TIMED_VALVE_CHANGE
