@@ -85,16 +85,17 @@ void setup() {
     Serial.println("Couldn't find INA260 chip");
     while (1);
   }
+  
+  // delay to allow valve to initialize and home
+  delay(4000);
 
   valve.attach(1);
   red.begin();
   green.begin();
   heartbeat.begin();
 
-#ifndef TIMED_VALVE_CHANGE
   int setPos = EEPROM.read(0) ? TOP_MICROSECONDS : BOTTOM_MICROSECONDS;
   setValvePosition(setPos);
-#endif
 }
 
 void loop() {
@@ -165,7 +166,6 @@ void sendPos(char pos) {
 #endif
 
 void turnValve() {
-
 #ifdef TIMED_VALVE_CHANGE
   if (isIntervalTime(VALVE_CHANGE_INTERVAL)) {
     if (valve.readMicroseconds() == BOTTOM_MICROSECONDS) {
