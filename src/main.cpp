@@ -191,6 +191,12 @@ void turnValve() {
 }
 
 void setValvePosition(int position) {
+  static unsigned long lastMoveTime = 0;
+  unsigned long currentTime = millis();
+  // Prevent rapid movements
+  if (currentTime - lastMoveTime < 2000) return;
+  
+  lastMoveTime = currentTime;
 
   // Servo will lose it's home position if power is too low
   // Setting to home gives us a chance it will be OK when power returns
