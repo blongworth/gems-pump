@@ -25,51 +25,140 @@
 #include <Flasher.h>
 #include <EEPROM.h>
 
-// Optional timer-based valve control
-#define TIMED_VALVE_CHANGE // to enable automatic valve switching based on time
+// =============================================================================
+// CONFIGURATION
+// =============================================================================
 
-// Clock time valve change interval in seconds
-const unsigned long VALVE_CHANGE_INTERVAL = 7.5 * 60; // 7:30 minutes
+// Enable serial control (comment out for timer-based valve control)
+// #define SERIAL_CONTROL
 
-const unsigned long LOG_INTERVAL = 10; // Logging interval in seconds
-const int BOTTOM_MICROSECONDS = 1205;  // 0 degrees
-const int TOP_MICROSECONDS = 1795; // 179 degrees
-const int HOME_MICROSECONDS = 1500; // 89 degrees
-//Threshold voltage = too low power!!
-const int THRESHOLD_VOLTAGE = 10000; //in mV
+// =============================================================================
+// CONSTANTS
+// =============================================================================
 
-Adafruit_INA260 power;
-int voltage = 0, current = 0;
-char filename[32] = {0};
+// Timing constants
+const unsigned long VALVE_CHANGE_INTERVAL = 450; // 7.5 minutes in seconds
+const unsigned long LOG_INTERVAL = 10;           // Data logging interval in seconds
+const unsigned long MIN_MOVE_INTERVAL = 2000;    // Minimum time between valve movements (ms)
+const unsigned long POWER_CHECK_INTERVAL = 10;   // Power monitoring interval (ms)
+
+// Servo position constants (microseconds)
+const int VALVE_BOTTOM_POS = 1205;  // 0 degrees (bottom position)
+const int VALVE_TOP_POS = 1795;     // 179 degrees (top position)  
+const int VALVE_HOME_POS = 1500;    // 89 degrees (safe home position)
+const int VALVE_TOLERANCE = 10;     // Position tolerance for movement decisions
+
+// Power monitoring
+const int LOW_VOLTAGE_THRESHOLD = 10000; // Minimum voltage in mV
+
+// Pin definitions
+const int RED_LED_PIN = 39;
+const int GREEN_LED_PIN = 36;
+
+// =============================================================================
+// GLOBAL VARIABLES
+// =============================================================================
+
+Adafruit_INA260 powerSensor;
 Servo valve;
+char currentLogFile[32] = {0};
 
-Flasher red(39, 0, 1000), green(36, 0, 1000), heartbeat(LED_BUILTIN, 100, 900);
+// LED indicators
+Flasher redLED(RED_LED_PIN, 0, 1000);
+Flasher greenLED(GREEN_LED_PIN, 0, 1000); 
+Flasher heartbeatLED(LED_BUILTIN, 100, 900);
 
 #define LANDER_SERIAL Serial2
 
-void logPower();
-void turnValve();
+// =============================================================================
+// FUNCTION DECLARATIONS
+// =============================================================================
+
+void initializeSystem();
+void initializeSD();
+void logPowerData();
+void handleValveControl();
 void setValvePosition(int position);
-void updateFilename();
+void updateLogFilename();
+void checkPowerAndHome();
+void updateLEDStatus(int valvePosition);
+int calculateExpectedValvePosition();
 time_t getTeensy3Time();
-bool isIntervalTime(int intervalSeconds);
-void checkAndHomeOnLowPower();
+
+#ifdef SERIAL_CONTROL
+void sendPositionToLander(char position);
+#endif
+
+// =============================================================================
+// SETUP
+// =============================================================================
 
 void setup() {
   Serial.begin(115200);
   Serial.println("GEMS Pump Control System");
   Serial.printf("Compiled: %s %s\n", __DATE__, __TIME__);
 
+  initializeSystem();
+  initializeSD();
+  
+#ifdef SERIAL_CONTROL
+  // Initialize valve to last known position
+  int lastPosition = EEPROM.read(0) ? VALVE_TOP_POS : VALVE_BOTTOM_POS;
+  setValvePosition(lastPosition);
+#endif
+}
+
+// =============================================================================
+// MAIN LOOP
+// =============================================================================
+
+void loop() {
+  checkPowerAndHome();
+  handleValveControl();
+  updateLogFilename();
+  logPowerData();
+  
+  // Update LED indicators
+  redLED.run();
+  greenLED.run();
+  heartbeatLED.run();
+}
+
+// =============================================================================
+// SYSTEM INITIALIZATION
+// =============================================================================
+
+void initializeSystem() {
+  // Initialize serial communication
   LANDER_SERIAL.begin(115200);
   LANDER_SERIAL.println("Lander Serial Initialized");
 
+  // Initialize RTC
   setSyncProvider(getTeensy3Time);
   Serial.println(timeStatus() != timeSet ? "Unable to sync with RTC" : "RTC has set the system time");
 
-  if (!SD.begin(BUILTIN_SDCARD)) Serial.println("SD card initialization failed!");
+  // Initialize power sensor
+  if (!powerSensor.begin()) {
+    Serial.println("Couldn't find INA260 chip");
+    while (1);
+  }
+  
+  // Initialize servo and LEDs
+  delay(4000); // Allow valve to initialize
+  valve.attach(1);
+  redLED.begin();
+  greenLED.begin();
+  heartbeatLED.begin();
+}
 
-  updateFilename();
-  File dataFile = SD.open(filename, FILE_WRITE);
+void initializeSD() {
+  if (!SD.begin(BUILTIN_SDCARD)) {
+    Serial.println("SD card initialization failed!");
+    return;
+  }
+
+  updateLogFilename();
+  File dataFile = SD.open(currentLogFile, FILE_WRITE);
   if (dataFile) {
     char timestamp[25];
     time_t t = now();
@@ -78,175 +167,185 @@ void setup() {
     dataFile.printf("Rebooted at %s\n", timestamp);
     dataFile.close();
   } else {
-    Serial.printf("Error opening %s\n", filename);
+    Serial.printf("Error opening %s\n", currentLogFile);
   }
-
-  if (!power.begin()) {
-    Serial.println("Couldn't find INA260 chip");
-    while (1);
-  }
-  
-  // delay to allow valve to initialize and home
-  delay(4000);
-
-  valve.attach(1);
-  red.begin();
-  green.begin();
-  heartbeat.begin();
-
-  int setPos = EEPROM.read(0) ? TOP_MICROSECONDS : BOTTOM_MICROSECONDS;
-  setValvePosition(setPos);
 }
 
-void loop() {
-  checkAndHomeOnLowPower();
-  turnValve();
-  updateFilename();
-  logPower();
-  red.run();
-  green.run();
-  heartbeat.run();
-}
+// =============================================================================
+// FILE MANAGEMENT
+// =============================================================================
 
-void updateFilename() {
+void updateLogFilename() {
   static time_t lastDay = 0;
-  time_t t = now();
+  time_t currentTime = now();
 
-  if (strlen(filename) == 0 || day(t) != day(lastDay)) { // Check if filename not set or day has changed
-    sprintf(filename, "gems_pump_%04d-%02d-%02d.csv", year(t), month(t), day(t));
+  if (strlen(currentLogFile) == 0 || day(currentTime) != day(lastDay)) {
+    sprintf(currentLogFile, "gems_pump_%04d-%02d-%02d.csv", 
+            year(currentTime), month(currentTime), day(currentTime));
 
-    if (!SD.exists(filename)) {
-      File dataFile = SD.open(filename, FILE_WRITE);
+    // Create file with header if it doesn't exist
+    if (!SD.exists(currentLogFile)) {
+      File dataFile = SD.open(currentLogFile, FILE_WRITE);
       if (dataFile) {
         dataFile.println("timestamp,voltage,current,valve_position"); 
         dataFile.close();
       }
     }
-    lastDay = t;
+    lastDay = currentTime;
   }
 }
 
-void logPower() {
-  static unsigned long lastLogTime = 0;
-  if ((now() - lastLogTime) < LOG_INTERVAL) return;
+// =============================================================================
+// DATA LOGGING
+// =============================================================================
 
-  // Read power and valve position
-  voltage = power.readBusVoltage();
-  current = power.readCurrent();
-  int valve_pos = valve.readMicroseconds();
+void logPowerData() {
+  static time_t lastLogTime = 0;
+  time_t currentTime = now();
+  if (currentTime - lastLogTime < LOG_INTERVAL) return;
+
+  // Read sensor data
+  int voltage = powerSensor.readBusVoltage();
+  int current = powerSensor.readCurrent();
+  int valvePosition = valve.readMicroseconds();
 
   // Format timestamp
   char timestamp[25];
-  time_t t = now();
   snprintf(timestamp, sizeof(timestamp), "%04d-%02d-%02dT%02d:%02d:%02dZ",
-           year(t), month(t), day(t), hour(t), minute(t), second(t));
+           year(currentTime), month(currentTime), day(currentTime), 
+           hour(currentTime), minute(currentTime), second(currentTime));
 
+  char pos[7] = "bottom";
+  if (valvePosition == VALVE_TOP_POS) {
+    strcpy(pos, "top");
+  }
   // Log to serial
-  Serial.printf("Logged Power at %s - Voltage: %d mV, Current: %d mA, Valve Pos: %d\n",
-                timestamp, voltage, current, valve_pos);
+  Serial.printf("Logged Power at %s - Voltage: %d mV, Current: %d mA, Valve Pos: %s\n",
+                timestamp, voltage, current, pos);
+
+  char logLine[100];
+  snprintf(logLine, sizeof(logLine), "%s,%d,%d,%d\n", timestamp, voltage, current, valvePosition);
 
   // Log to SD card
-  File dataFile = SD.open(filename, FILE_WRITE);
+  File dataFile = SD.open(currentLogFile, FILE_WRITE);
   if (dataFile) {
-    dataFile.printf("%s,%d,%d,%d\n", timestamp, voltage, current, valve_pos);
+    dataFile.print(logLine);
     dataFile.close();
   } else {
-    Serial.printf("Error opening %s\n", filename);
+    Serial.printf("Error opening %s\n", currentLogFile);
   }
+  
+  // Log to Lander Serial
+  LANDER_SERIAL.printf("V:%s", logLine);
 
   lastLogTime = now();
 }
 
-#ifndef TIMED_VALVE_CHANGE
-void sendPos(char pos) {
-  LANDER_SERIAL.write(pos);
-  LANDER_SERIAL.flush();
-  Serial.printf("Sent position: %c\n", pos);
-} 
-#endif
 
-void turnValve() {
-#ifdef TIMED_VALVE_CHANGE
-  if (isIntervalTime(VALVE_CHANGE_INTERVAL)) {
-    if (valve.readMicroseconds() == BOTTOM_MICROSECONDS) {
-      Serial.println("Timer: Turning to top");
-      setValvePosition(TOP_MICROSECONDS);
-    } else {
-      Serial.println("Timer: Turning to bottom");
-      setValvePosition(BOTTOM_MICROSECONDS);
+// =============================================================================
+// VALVE CONTROL
+// =============================================================================
+
+void handleValveControl() {
+  int currentPosition = valve.readMicroseconds();
+  int targetPosition = 0;
+  
+#ifdef SERIAL_CONTROL
+  if (LANDER_SERIAL.available()) {
+    char command = LANDER_SERIAL.read();
+    if (command == 't') {
+      targetPosition = VALVE_TOP_POS;
+      Serial.println("Serial: Turning to top");
+    } else if (command == 'b') {
+      targetPosition = VALVE_BOTTOM_POS;
+      Serial.println("Serial: Turning to bottom");
     }
   }
 #else
-  if (LANDER_SERIAL.available()) {
-    char command = LANDER_SERIAL.read();
-    if (command == 't' && valve.readMicroseconds() < TOP_MICROSECONDS - 10) {
-      Serial.println("Turning to top");
-      setValvePosition(TOP_MICROSECONDS);
-    } else if (command == 'b' && valve.readMicroseconds() > BOTTOM_MICROSECONDS + 10) {
-      Serial.println("Turning to bottom");
-      setValvePosition(BOTTOM_MICROSECONDS);
-    }
-  }
+  targetPosition = calculateExpectedValvePosition();
 #endif
+  
+  // Move valve if target position is different enough from current position
+  if (targetPosition != 0 && abs(currentPosition - targetPosition) > VALVE_TOLERANCE) {
+#ifndef SERIAL_CONTROL
+    // Print debug message only when actually moving in timer mode
+    if (targetPosition == VALVE_TOP_POS) {
+      Serial.println("Timer: Turning to top");
+    } else {
+      Serial.println("Timer: Turning to bottom");
+    }
+#endif
+    setValvePosition(targetPosition);
+  }
 }
 
 void setValvePosition(int position) {
   static unsigned long lastMoveTime = 0;
   unsigned long currentTime = millis();
-  // Prevent rapid movements
-  if (currentTime - lastMoveTime < 2000) return;
   
+  // Prevent rapid movements
+  if (currentTime - lastMoveTime < MIN_MOVE_INTERVAL) return;
   lastMoveTime = currentTime;
 
-  // Servo will lose it's home position if power is too low
-  // Setting to home gives us a chance it will be OK when power returns
-  if (power.readBusVoltage() < THRESHOLD_VOLTAGE) {
+  // Check for low power condition
+  if (powerSensor.readBusVoltage() < LOW_VOLTAGE_THRESHOLD) {
     Serial.println("Power too low, returning to home position");
-    valve.writeMicroseconds(HOME_MICROSECONDS);
-    red.update(200, 800);
-    green.update(200, 800);
+    valve.writeMicroseconds(VALVE_HOME_POS);
+    updateLEDStatus(VALVE_HOME_POS);
     return;
   }
 
+  // Move valve to requested position
   valve.writeMicroseconds(position);
-  EEPROM.update(0, (position == TOP_MICROSECONDS) ? 1 : 0); // Store position in EEPROM
+  EEPROM.update(0, (position == VALVE_TOP_POS) ? 1 : 0);
+  updateLEDStatus(position);
+}
 
-  #ifndef TIMED_VALVE_CHANGE
-  char posChar = (position == BOTTOM_MICROSECONDS) ? 'b' : 't';
-  sendPos(posChar);
-  #endif
-
-  if (position == TOP_MICROSECONDS) {
-    red.update(100, 900);
-    green.update(0, 1000);
+void updateLEDStatus(int valvePosition) {
+  if (valvePosition == VALVE_HOME_POS) {
+    // Blinking pattern for home/error position
+    redLED.update(200, 800);
+    greenLED.update(200, 800);
+  } else if (valvePosition == VALVE_TOP_POS) {
+    // Red mostly off, green mostly on for top position
+    redLED.update(100, 900);
+    greenLED.update(0, 1000);
   } else {
-    red.update(0, 1000);
-    green.update(100, 900);
+    // Red mostly on, green mostly off for bottom position
+    redLED.update(0, 1000);
+    greenLED.update(100, 900);
   }
 }
 
-void checkAndHomeOnLowPower() {
+// =============================================================================
+// POWER MONITORING
+// =============================================================================
+
+void checkPowerAndHome() {
   static unsigned long lastCheck = 0;
-  if (millis() - lastCheck < 10) return;
+  if (millis() - lastCheck < POWER_CHECK_INTERVAL) return;
   lastCheck = millis();
 
-  voltage = power.readBusVoltage();
-  if (voltage < THRESHOLD_VOLTAGE && valve.readMicroseconds() != HOME_MICROSECONDS) {
+  int voltage = powerSensor.readBusVoltage();
+  if (voltage < LOW_VOLTAGE_THRESHOLD && valve.readMicroseconds() != VALVE_HOME_POS) {
     Serial.println("Low power detected, moving valve to home position");
-    valve.writeMicroseconds(HOME_MICROSECONDS);
-    red.update(200, 800);
-    green.update(200, 800);
+    valve.writeMicroseconds(VALVE_HOME_POS);
+    updateLEDStatus(VALVE_HOME_POS);
   }
 }
+
+// =============================================================================
+// UTILITY FUNCTIONS
+// =============================================================================
 
 time_t getTeensy3Time() {
   return Teensy3Clock.get();
 }
 
-bool isIntervalTime(int intervalSeconds) {
-  time_t t = now();
-  int minutes = minute(t);
-  int seconds = second(t);
-  int totalSeconds = minutes * 60 + seconds;
-  return (totalSeconds % intervalSeconds) == 0;
+int calculateExpectedValvePosition() {
+  time_t currentTime = now();
+  int totalSeconds = minute(currentTime) * 60 + second(currentTime);
+  int intervalNumber = totalSeconds / VALVE_CHANGE_INTERVAL;
+  
+  return (intervalNumber % 2 == 0) ? VALVE_BOTTOM_POS : VALVE_TOP_POS;
 }
