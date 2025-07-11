@@ -46,12 +46,12 @@ const unsigned long POWER_CHECK_INTERVAL = 10;   // Power monitoring interval (m
 const int VALVE_BOTTOM_POS = 1205;  // 0 degrees (bottom position)
 const int VALVE_TOP_POS = 1795;     // 179 degrees (top position)  
 const int VALVE_HOME_POS = 1500;    // 89 degrees (safe home position)
-const int VALVE_TOLERANCE = 10;     // Position tolerance for movement decisions
 
 // Power monitoring
 const int LOW_VOLTAGE_THRESHOLD = 10000; // Minimum voltage in mV
 
 // Pin definitions
+const int VALVE_SERVO_PIN = 1;
 const int RED_LED_PIN = 39;
 const int GREEN_LED_PIN = 36;
 
@@ -85,9 +85,6 @@ void updateLEDStatus(int valvePosition);
 int calculateExpectedValvePosition();
 time_t getTeensy3Time();
 
-#ifdef SERIAL_CONTROL
-void sendPositionToLander(char position);
-#endif
 
 // =============================================================================
 // SETUP
@@ -95,6 +92,7 @@ void sendPositionToLander(char position);
 
 void setup() {
   Serial.begin(115200);
+  delay(1000); // Allow time for Serial Monitor to open
   Serial.println("GEMS Pump Control System");
   Serial.printf("Compiled: %s %s\n", __DATE__, __TIME__);
 
@@ -145,7 +143,7 @@ void initializeSystem() {
   
   // Initialize servo and LEDs
   delay(4000); // Allow valve to initialize
-  valve.attach(1);
+  valve.attach(VALVE_SERVO_PIN);
   redLED.begin();
   greenLED.begin();
   heartbeatLED.begin();
@@ -241,7 +239,6 @@ void logPowerData() {
   lastLogTime = now();
 }
 
-
 // =============================================================================
 // VALVE CONTROL
 // =============================================================================
@@ -265,8 +262,8 @@ void handleValveControl() {
   targetPosition = calculateExpectedValvePosition();
 #endif
   
-  // Move valve if target position is different enough from current position
-  if (targetPosition != 0 && abs(currentPosition - targetPosition) > VALVE_TOLERANCE) {
+  // Move valve if target position is different from current position
+  if (targetPosition != 0 && currentPosition != targetPosition) {
 #ifndef SERIAL_CONTROL
     // Print debug message only when actually moving in timer mode
     if (targetPosition == VALVE_TOP_POS) {
