@@ -37,18 +37,17 @@
 // =============================================================================
 
 // Timing constants
-const unsigned long VALVE_CHANGE_INTERVAL = 450; // 7.5 minutes in seconds
+const unsigned long VALVE_CHANGE_INTERVAL = 30; // 7.5 minutes in seconds
 const unsigned long LOG_INTERVAL = 10;           // Data logging interval in seconds
 const unsigned long MIN_MOVE_INTERVAL = 2000;    // Minimum time between valve movements (ms)
-const unsigned long POWER_CHECK_INTERVAL = 10;   // Power monitoring interval (ms)
 
 // Servo position constants (microseconds)
-const int VALVE_BOTTOM_POS = 1205;  // 0 degrees (bottom position)
-const int VALVE_TOP_POS = 1795;     // 179 degrees (top position)  
+// const int VALVE_BOTTOM_POS = 1205;  // 0 degrees (bottom position)
+// const int VALVE_TOP_POS = 1795;     // 179 degrees (top position)  
+// const int VALVE_HOME_POS = 1500;    // 89 degrees (safe home position)
+const int VALVE_BOTTOM_POS = 1000;  // 0 degrees (bottom position)
+const int VALVE_TOP_POS = 2000;     // 179 degrees (top position)  
 const int VALVE_HOME_POS = 1500;    // 89 degrees (safe home position)
-
-// Power monitoring
-const int LOW_VOLTAGE_THRESHOLD = 10000; // Minimum voltage in mV
 
 // Pin definitions
 const int VALVE_SERVO_PIN = 1;
@@ -80,7 +79,6 @@ void logPowerData();
 void handleValveControl();
 void setValvePosition(int position);
 void updateLogFilename();
-void checkPowerAndHome();
 void updateLEDStatus(int valvePosition);
 int calculateExpectedValvePosition();
 time_t getTeensy3Time();
@@ -111,7 +109,6 @@ void setup() {
 // =============================================================================
 
 void loop() {
-  checkPowerAndHome();
   handleValveControl();
   updateLogFilename();
   logPowerData();
@@ -122,8 +119,9 @@ void loop() {
   heartbeatLED.run();
 }
 
+
 // =============================================================================
-// SYSTEM INITIALIZATION
+// FUNCTION DEFINITIONS
 // =============================================================================
 
 void initializeSystem() {
@@ -169,10 +167,6 @@ void initializeSD() {
   }
 }
 
-// =============================================================================
-// FILE MANAGEMENT
-// =============================================================================
-
 void updateLogFilename() {
   static time_t lastDay = 0;
   time_t currentTime = now();
@@ -193,14 +187,12 @@ void updateLogFilename() {
   }
 }
 
-// =============================================================================
-// DATA LOGGING
-// =============================================================================
-
 void logPowerData() {
   static time_t lastLogTime = 0;
   time_t currentTime = now();
-  if (currentTime - lastLogTime < LOG_INTERVAL) return;
+  
+  if (currentTime <= lastLogTime) return;
+  if (second(currentTime) % LOG_INTERVAL != 0) return;
 
   // Read sensor data
   int voltage = powerSensor.readBusVoltage();
@@ -218,8 +210,11 @@ void logPowerData() {
     strcpy(pos, "top");
   }
   // Log to serial
-  Serial.printf("Logged Power at %s - Voltage: %d mV, Current: %d mA, Valve Pos: %s\n",
-                timestamp, voltage, current, pos);
+  char logSerial[100];
+  snprintf(logSerial, sizeof(logSerial), 
+           "Logged Power at %s - Voltage: %d mV, Current: %d mA, Valve Pos: %s\n",
+           timestamp, voltage, current, pos);
+  Serial.print(logSerial);
 
   char logLine[100];
   snprintf(logLine, sizeof(logLine), "%s,%d,%d,%d\n", timestamp, voltage, current, valvePosition);
@@ -238,10 +233,6 @@ void logPowerData() {
 
   lastLogTime = now();
 }
-
-// =============================================================================
-// VALVE CONTROL
-// =============================================================================
 
 void handleValveControl() {
   int currentPosition = valve.readMicroseconds();
@@ -284,14 +275,6 @@ void setValvePosition(int position) {
   if (currentTime - lastMoveTime < MIN_MOVE_INTERVAL) return;
   lastMoveTime = currentTime;
 
-  // Check for low power condition
-  if (powerSensor.readBusVoltage() < LOW_VOLTAGE_THRESHOLD) {
-    Serial.println("Power too low, returning to home position");
-    valve.writeMicroseconds(VALVE_HOME_POS);
-    updateLEDStatus(VALVE_HOME_POS);
-    return;
-  }
-
   // Move valve to requested position
   valve.writeMicroseconds(position);
   EEPROM.update(0, (position == VALVE_TOP_POS) ? 1 : 0);
@@ -300,40 +283,16 @@ void setValvePosition(int position) {
 
 void updateLEDStatus(int valvePosition) {
   if (valvePosition == VALVE_HOME_POS) {
-    // Blinking pattern for home/error position
     redLED.update(200, 800);
     greenLED.update(200, 800);
   } else if (valvePosition == VALVE_TOP_POS) {
-    // Red mostly off, green mostly on for top position
     redLED.update(100, 900);
     greenLED.update(0, 1000);
   } else {
-    // Red mostly on, green mostly off for bottom position
     redLED.update(0, 1000);
     greenLED.update(100, 900);
   }
 }
-
-// =============================================================================
-// POWER MONITORING
-// =============================================================================
-
-void checkPowerAndHome() {
-  static unsigned long lastCheck = 0;
-  if (millis() - lastCheck < POWER_CHECK_INTERVAL) return;
-  lastCheck = millis();
-
-  int voltage = powerSensor.readBusVoltage();
-  if (voltage < LOW_VOLTAGE_THRESHOLD && valve.readMicroseconds() != VALVE_HOME_POS) {
-    Serial.println("Low power detected, moving valve to home position");
-    valve.writeMicroseconds(VALVE_HOME_POS);
-    updateLEDStatus(VALVE_HOME_POS);
-  }
-}
-
-// =============================================================================
-// UTILITY FUNCTIONS
-// =============================================================================
 
 time_t getTeensy3Time() {
   return Teensy3Clock.get();
@@ -343,6 +302,5 @@ int calculateExpectedValvePosition() {
   time_t currentTime = now();
   int totalSeconds = minute(currentTime) * 60 + second(currentTime);
   int intervalNumber = totalSeconds / VALVE_CHANGE_INTERVAL;
-  
   return (intervalNumber % 2 == 0) ? VALVE_BOTTOM_POS : VALVE_TOP_POS;
 }
