@@ -42,11 +42,8 @@ const unsigned long LOG_INTERVAL = 10;           // Data logging interval in sec
 const unsigned long MIN_MOVE_INTERVAL = 2000;    // Minimum time between valve movements (ms)
 
 // Servo position constants (microseconds)
-// const int VALVE_BOTTOM_POS = 1205;  // 0 degrees (bottom position)
-// const int VALVE_TOP_POS = 1795;     // 179 degrees (top position)  
-// const int VALVE_HOME_POS = 1500;    // 89 degrees (safe home position)
-const int VALVE_BOTTOM_POS = 1000;  // 0 degrees (bottom position)
-const int VALVE_TOP_POS = 2000;     // 179 degrees (top position)  
+const int VALVE_BOTTOM_POS = 1205;  // 0 degrees (bottom position)
+const int VALVE_TOP_POS = 1795;     // 179 degrees (top position)  
 const int VALVE_HOME_POS = 1500;    // 89 degrees (safe home position)
 
 // Pin definitions
@@ -75,12 +72,12 @@ Flasher heartbeatLED(LED_BUILTIN, 100, 900);
 
 void initializeSystem();
 void initializeSD();
-void logPowerData();
+void logPowerData(time_t currentTime);
 void handleValveControl();
 void setValvePosition(int position);
 void updateLogFilename();
 void updateLEDStatus(int valvePosition);
-int calculateExpectedValvePosition();
+int calculateExpectedValvePosition(time_t currentTime);
 time_t getTeensy3Time();
 
 
@@ -111,7 +108,6 @@ void setup() {
 void loop() {
   handleValveControl();
   updateLogFilename();
-  logPowerData();
   
   // Update LED indicators
   redLED.run();
@@ -187,13 +183,7 @@ void updateLogFilename() {
   }
 }
 
-void logPowerData() {
-  static time_t lastLogTime = 0;
-  time_t currentTime = now();
-  
-  if (currentTime <= lastLogTime) return;
-  if (second(currentTime) % LOG_INTERVAL != 0) return;
-
+void logPowerData(time_t currentTime) {
   // Read sensor data
   int voltage = powerSensor.readBusVoltage();
   int current = powerSensor.readCurrent();
@@ -230,11 +220,11 @@ void logPowerData() {
   
   // Log to Lander Serial
   LANDER_SERIAL.printf("V:%s", logLine);
-
-  lastLogTime = now();
 }
 
 void handleValveControl() {
+  time_t currentTime = now();
+  static time_t lastLogTime = 0;
   int currentPosition = valve.readMicroseconds();
   int targetPosition = 0;
   
@@ -250,7 +240,7 @@ void handleValveControl() {
     }
   }
 #else
-  targetPosition = calculateExpectedValvePosition();
+  targetPosition = calculateExpectedValvePosition(currentTime);
 #endif
   
   // Move valve if target position is different from current position
@@ -265,15 +255,21 @@ void handleValveControl() {
 #endif
     setValvePosition(targetPosition);
   }
+  
+  // Handle logging after valve control to log correct position
+  if (currentTime <= lastLogTime) return;
+  if (second(currentTime) % LOG_INTERVAL != 0) return;
+  logPowerData(currentTime);
+  lastLogTime = now();
 }
 
 void setValvePosition(int position) {
-  static unsigned long lastMoveTime = 0;
-  unsigned long currentTime = millis();
+  static unsigned long lastMoveMillis = 0;
+  unsigned long currentMillis = millis();
   
   // Prevent rapid movements
-  if (currentTime - lastMoveTime < MIN_MOVE_INTERVAL) return;
-  lastMoveTime = currentTime;
+  if (currentMillis - lastMoveMillis < MIN_MOVE_INTERVAL) return;
+  lastMoveMillis = currentMillis;
 
   // Move valve to requested position
   valve.writeMicroseconds(position);
@@ -298,8 +294,7 @@ time_t getTeensy3Time() {
   return Teensy3Clock.get();
 }
 
-int calculateExpectedValvePosition() {
-  time_t currentTime = now();
+int calculateExpectedValvePosition(time_t currentTime) {
   int totalSeconds = minute(currentTime) * 60 + second(currentTime);
   int intervalNumber = totalSeconds / VALVE_CHANGE_INTERVAL;
   return (intervalNumber % 2 == 0) ? VALVE_BOTTOM_POS : VALVE_TOP_POS;
