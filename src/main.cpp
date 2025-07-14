@@ -44,10 +44,6 @@
 // Include ValveManager after configuration
 #include <ValveManager.h>
 
-// =============================================================================
-// GLOBAL VARIABLES
-// =============================================================================
-
 ValveManager valveManager;
 
 
@@ -80,15 +76,5 @@ void setup() {
 void loop() {
   // Update the valve manager - handles all valve control and logging
   valveManager.update();
-  
-  // Optional: Print status information periodically
-  static unsigned long lastStatusPrint = 0;
-  if (millis() - lastStatusPrint > 30000) { // Print every 30 seconds
-    Serial.printf("Status - Position: %d, Voltage: %d mV, Current: %d mA\n",
-                  valveManager.getCurrentPosition(),
-                  valveManager.getVoltage(),
-                  valveManager.getCurrent());
-    lastStatusPrint = millis();
-  }
 }
 
